@@ -56,10 +56,13 @@ window.addEventListener("load", async () => {
   try {
     const h = await api("/api/health");
     state.mode = h.mode;
-    $("#mode").textContent = h.mode === "real" ? "模型模式" : "规则兜底模式";
+    $("#mode").textContent = h.mode === "real" ? "模型模式"
+      : h.mode === "demo" ? "纯前端演示" : "规则兜底模式";
     $("#mode").title = h.mode === "real"
       ? "已配置 DashScope，识别与匹配走真实模型"
-      : "未配置 API Key，使用规则实现，断网也能演示";
+      : h.mode === "demo"
+        ? "静态演示版：规则引擎运行在浏览器里，数据存在本地"
+        : "未配置 API Key，使用规则实现，断网也能演示";
   } catch (e) {
     $("#mode").textContent = "离线";
   }

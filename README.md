@@ -11,10 +11,12 @@
 
 ## 在线演示
 
-**<https://YOUR-NAME.github.io/guiwu/>** ← 部署后把这里换成你的地址
+**<https://vastosine.github.io/guiwu/>**　·　管理端 <https://vastosine.github.io/guiwu/admin.html>
 
 纯前端演示版：规则引擎跑在浏览器里，数据存在 `localStorage`，无需服务器、不会冷启动。
 另有完整版（Python + SQLite + 可选真实模型）见下方「快速开始」。
+
+> 若 `github.io` 在国内访问缓慢，可直接克隆仓库本地运行，效果完全一致。
 
 ## 为什么做这个
 
