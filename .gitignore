@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+app/data.db
+app/uploads/*
+!app/uploads/.gitkeep
+
+# 临时与本地文件
+_check_*.js
+smoke_run.py
+runout.txt
+*.log
+
+# Office 临时锁文件
+~$*
+
+# 系统
+.DS_Store
+Thumbs.db

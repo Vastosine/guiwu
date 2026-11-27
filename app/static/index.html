@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>物归 · 校园失物智能招领</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="phone">
+  <div class="topbar">
+    <h1>物　归</h1>
+    <span class="mode" id="mode">连接中…</span>
+  </div>
+  <nav class="tabbar">
+    <a href="#/post" data-tab="post">拾得入库</a>
+    <a href="#/find" data-tab="find">智能寻回</a>
+    <a href="/admin" target="_blank">管理端 ↗</a>
+  </nav>
+  <main id="view"></main>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const state = { image: "", mode: "mock", claimId: null, itemId: null };
+
+async function api(path, body) {
+  // 静态部署（GitHub Pages）时，engine.js 会提供纯前端实现
+  if (window.ENGINE) return window.ENGINE.handle(path, body === undefined ? null : body);
+  const opt = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  };
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({ ok: false, error: "返回不是 JSON" }));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+let toastTimer;
+function toast(msg, bad) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.className = "show" + (bad ? " bad" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.className = ""), 2600);
+}
+
+/* ---------------- 路由 ---------------- */
+window.addEventListener("hashchange", render);
+window.addEventListener("load", async () => {
+  try {
+    const h = await api("/api/health");
+    state.mode = h.mode;
+    $("#mode").textContent = h.mode === "real" ? "模型模式" : "规则兜底模式";
+    $("#mode").title = h.mode === "real"
+      ? "已配置 DashScope，识别与匹配走真实模型"
+      : "未配置 API Key，使用规则实现，断网也能演示";
+  } catch (e) {
+    $("#mode").textContent = "离线";
+  }
+  render();
+});
+
+function render() {
+  const hash = location.hash || "#/post";
+  const tab = hash.startsWith("#/find") ? "find" : hash.startsWith("#/verify") ? "find" : "post";
+  document.querySelectorAll("[data-tab]").forEach(a =>
+    a.classList.toggle("active", a.dataset.tab === tab));
+
+  const m = hash.match(/^#\/verify\/(\d+)/);
+  if (m) return renderVerify(Number(m[1]));
+  if (hash.startsWith("#/find")) return renderFind();
+  return renderPost();
+}
+
+/* ---------------- 视图一：拾得入库 ---------------- */
+function renderPost() {
+  $("#view").innerHTML = `
+    <h2 class="step">拍一张照片，剩下的交给它</h2>
+    <p class="lead">只填三件事：什么时候、在哪儿、有什么别人不知道的细节。</p>
+    <div id="uploadArea">
+      <div class="drop" id="drop">
+        <div class="cam"></div>
+        <p>拍照或选择图片</p>
+        <small>自动压缩 · 支持 JPG / PNG</small>
+      </div>
+      <input type="file" id="file" accept="image/*" hidden>
+    </div>
+    <div id="formArea"></div>
+  `;
+
+  $("#drop").onclick = () => $("#file").click();
+  $("#file").onchange = e => handleFile(e.target.files[0]);
+
+  const drop = $("#drop");
+  ["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.style.borderColor = "#C9622F";
+  }));
+  ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.style.borderColor = "";
+  }));
+  drop.addEventListener("drop", e => {
+    const f = e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+}
+
+async function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    state.image = reader.result;
+    $("#uploadArea").innerHTML =
+      `<img class="preview" src="${reader.result}" alt="预览">
+       <p class="note">图片已就绪，正在识别…</p>`;
+    try {
+      const r = await api("/api/parse", { image: reader.result });
+      showForm(r.fields);
+      if (r.fields.fallback) toast("未识别到模型结果，已预填示例字段，请手动确认");
+    } catch (e) {
+      toast(e.message, true);
+      showForm({ subject: "", brand: "unknown", color: "", features: [] });
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function showForm(f) {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 16);
+  const opts = ["耳机", "水杯", "保温杯", "雨伞", "校园卡", "充电宝", "钥匙",
+                "笔记本", "鼠标", "数据线", "眼镜", "其他"];
+  const optHtml = opts.map(o =>
+    `<option value="${o}" ${o === f.subject ? "selected" : ""}>${o}</option>`).join("");
+
+  $("#formArea").innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="card-head">
+        <h3>AI 识别结果</h3>
+        <span class="badge ghost">可编辑</span>
+      </div>
+      <div style="margin-top:12px">
+        <div class="row2">
+          <div class="field"><label>类别</label><select id="f-subject">${optHtml}</select></div>
+          <div class="field"><label>品牌</label><input id="f-brand" value="${esc(f.brand || "unknown")}"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>颜色</label><input id="f-color" value="${esc(f.color || "")}"></div>
+          <div class="field"><label>时间</label><input id="f-time" type="datetime-local" value="${local}"></div>
+        </div>
+        <div class="field"><label>地点</label><input id="f-place" placeholder="例如 3教101" value=""></div>
+        <div class="field"><label>显著特征（用、分隔）</label>
+          <input id="f-features" value="${esc((f.features || []).join("、"))}"></div>
+        <div class="field"><label>隐藏特征（只有失主知道的细节，必填）</label>
+          <textarea id="f-hidden" placeholder="例如：耳机盒背面有一张卡通猫贴纸"></textarea></div>
+      </div>
+      <div class="switch-row" style="margin-top:4px">
+        <span>隐藏卡面姓名与学号</span>
+        <div class="switch on" id="f-privacy"></div>
+      </div>
+      <button class="primary" id="publish" style="margin-top:14px">发布到失物库</button>
+      <p class="note">发布后公开的只有类别、颜色、地点和时间；隐藏特征不会出现在任何列表里。</p>
+    </div>
+  `;
+
+  $("#f-privacy").onclick = e => e.currentTarget.classList.toggle("on");
+  $("#f-hidden").focus();
+  $("#publish").onclick = publish;
+}
+
+async function publish() {
+  const btn = $("#publish");
+  const hidden = $("#f-hidden").value.trim();
+  if (hidden.length < 4) return toast("请填写隐藏特征：这是后续核验的唯一凭据", true);
+
+  const timeVal = $("#f-time").value;
+  const found = timeVal ? timeVal.replace("T", " ") : "";
+  btn.disabled = true;
+  btn.textContent = "发布中…";
+  try {
+    const r = await api("/api/items", {
+      subject: $("#f-subject").value,
+      brand: $("#f-brand").value.trim() || "unknown",
+      color: $("#f-color").value.trim(),
+      features: $("#f-features").value.split(/[、,，]/).map(s => s.trim()).filter(Boolean),
+      place: $("#f-place").value.trim(),
+      found_at: found,
+      hidden_feature: hidden,
+      visibility: $("#f-privacy").classList.contains("on") ? "public_redacted" : "public",
+      image: state.image
+    });
+    toast(`已入库 · 编号 #${r.item.id} · 状态：在库`);
+    $("#formArea").innerHTML = `
+      <div class="card soft" style="margin-top:14px">
+        <h3 style="margin:0 0 6px">已发布 · #${r.item.id}</h3>
+        <p class="meta">${esc(r.item.subject)} · ${esc(r.item.color)} · ${esc(r.item.place)}</p>
+        <p class="note">去「智能寻回」用一句话试试能不能找回它。</p>
+        <button class="ghost" onclick="location.hash='#/find'">去试试寻回</button>
+      </div>`;
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = "发布到失物库";
+  }
+}
+
+/* ---------------- 视图二：智能寻回 ---------------- */
+function renderFind() {
+  $("#view").innerHTML = `
+    <h2 class="step">丢东西了？用一句话说清楚</h2>
+    <p class="lead">不用选分类、不用选时间。写清楚“什么时候、在哪儿、丢了什么”就够了。</p>
+    <div class="field">
+      <textarea id="q" placeholder="例如：昨天下午在 3 教丢了个白色无线耳机"></textarea>
+    </div>
+    <button class="primary" id="go">开始寻找</button>
+    <div id="result"></div>
+  `;
+  $("#go").onclick = doSearch;
+  $("#q").onkeydown = e => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) doSearch();
+  };
+}
+
+async function doSearch() {
+  const q = $("#q").value.trim();
+  if (q.length < 2) return toast("再多描述一点，比如“昨天在 3 教丢了白色耳机”", true);
+  const btn = $("#go");
+  btn.disabled = true; btn.textContent = "检索中…";
+  try {
+    const r = await api("/api/search", { query: q });
+    const c = r.conditions || {};
+    const chips = [
+      c.subject, c.color, c.place,
+      (c.time_from || "").slice(5, 16) + " 起"
+    ].filter(Boolean);
+
+    if (!r.candidates.length) {
+      $("#result").innerHTML = `
+        <div class="chips">${chips.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>
+        <div class="card soft"><h3 style="margin:0 0 6px">暂时没有对得上的条目</h3>
+        <p class="note">试试补充品牌、颜色，或者放宽时间范围。</p></div>`;
+    } else {
+      $("#result").innerHTML = `
+        <div class="chips">${chips.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>
+        ${r.candidates.map((c, i) => card(c, i === 0)).join("")}
+        <p class="note">没找到？补充特征（贴纸 / 划痕 / 包装），或到管理端查看代管点的滞留物品。</p>`;
+    }
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = "开始寻找";
+  }
+}
+
+function card(c, hot) {
+  const conf = (c.conflicts || []).length
+    ? `<span class="conflict">${esc(c.conflicts.join("、"))}</span>　` : "";
+  return `
+    <div class="card ${hot ? "hot" : ""}">
+      <div class="card-head">
+        <h3>${esc(c.subject)}${c.brand && c.brand !== "unknown" ? " · " + esc(c.brand) : ""}</h3>
+        <span class="badge ${hot ? "accent" : ""}">匹配 ${c.score}%</span>
+      </div>
+      <p class="meta">${esc(c.place)} · ${esc(c.found_at)} · ${c.status === "in_store" ? "在库" : "已认领"}</p>
+      <div class="reason"><b>推荐理由</b>${conf}${esc(c.reason)}</div>
+      <button class="ghost" style="margin-top:10px"
+        onclick="location.hash='#/verify/${c.id}'">申请认领 →</button>
+    </div>`;
+}
+
+/* ---------------- 视图三：特征核验 ---------------- */
+async function renderVerify(id) {
+  state.itemId = id;
+  $("#view").innerHTML = `<p class="lead">正在生成核验问题…</p>`;
+  try {
+    const r = await api(`/api/items/${id}/questions`);
+    state.claimId = r.claim_id;
+    $("#view").innerHTML = `
+      <h2 class="step">回答三个问题，证明它是你的</h2>
+      <p class="lead">问题来自拾得者留下的细节。答对 2 题、置信度过线，才会生成认领码。</p>
+      ${r.questions.map((q, i) => `
+        <div class="q">
+          <span class="no">Q${i + 1}</span>
+          <p>${esc(q.q)}</p>
+          <textarea data-i="${i}" placeholder="用自己的话回答就行"></textarea>
+        </div>`).join("")}
+      <button class="primary" id="submit">提交核验</button>
+      <div id="vres"></div>
+    `;
+    $("#submit").onclick = submitVerify;
+  } catch (e) {
+    $("#view").innerHTML = `<p class="lead">${esc(e.message)}</p>
+      <button class="ghost" onclick="location.hash='#/find'">返回寻找</button>`;
+  }
+}
+
+async function submitVerify() {
+  const answers = [...document.querySelectorAll(".q textarea")].map(t => t.value.trim());
+  if (answers.filter(Boolean).length === 0) return toast("至少回答一题", true);
+  const btn = $("#submit");
+  btn.disabled = true; btn.textContent = "判定中…";
+  try {
+    const r = await api("/api/verify", { claim_id: state.claimId, answers });
+    if (r.passed) {
+      $("#vres").innerHTML = `
+        <div class="result-pass" style="margin-top:14px">
+          <div style="font-size:12px;color:#2E7A72">核验通过 · 答对 ${r.correct}/3 · 置信度 ${r.confidence}</div>
+          <div class="code">${esc(r.code)}</div>
+          <div style="font-size:12px;color:#4E5A66;line-height:1.7">
+            24 小时内到 <b>${esc((r.item || {}).place || "保管点")}</b> 出示认领码领取。<br>
+            凭证一次性有效，管理员核销后即失效。
+          </div>
+        </div>`;
+      btn.style.display = "none";
+    } else {
+      $("#vres").innerHTML = `
+        <div class="result-fail" style="margin-top:14px">
+          <b>${esc(r.message)}</b>
+          <div style="font-size:12px;margin-top:8px;color:#8B3B2E">
+            答对 ${r.correct}/3 · 置信度 ${r.confidence}（阈值：2 题且 ≥ 0.7）
+          </div>
+        </div>`;
+      btn.disabled = false; btn.textContent = "再试一次";
+    }
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false; btn.textContent = "提交核验";
+  }
+}
+</script>
+</body>
+</html>

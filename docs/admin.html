@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>物归 · 管理端</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wide">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin:6px 0 18px">
+    <div>
+      <div style="font-size:12px;color:#C9622F;font-weight:700;letter-spacing:.14em">代管点 · 权益部</div>
+      <h1 style="margin:4px 0 0;font-size:26px;letter-spacing:.1em">物归 · 管理端</h1>
+    </div>
+    <div style="display:flex;gap:10px">
+      <a href="index.html" style="font-size:13px;color:#4E5A66;text-decoration:none">← 学生端</a>
+      <button class="ghost" style="width:auto;padding:8px 16px" id="reset">重置演示数据</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin:0 0 4px;font-size:15px">认领核销</h2>
+    <p class="note" style="margin:0 0 14px">输入失主出示的认领码，核销后物品状态置为「已认领」并留痕。</p>
+    <div class="inline">
+      <input id="code" placeholder="例如 A7K-92F" autocomplete="off">
+      <button id="redeem">确认核销</button>
+    </div>
+    <div id="rmsg" style="margin-top:12px;font-size:13px"></div>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin:0 0 14px;font-size:15px">失物列表 <span id="count" style="font-size:12px;color:#8B949D;font-weight:400"></span></h2>
+    <table>
+      <thead><tr><th style="width:52px">编号</th><th>物品</th><th>地点</th><th>入库时间</th><th style="width:86px">状态</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin:0 0 10px;font-size:15px">操作日志</h2>
+    <div id="logs"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(path, body) {
+  // 静态部署（GitHub Pages）时，engine.js 会提供纯前端实现
+  if (window.ENGINE) return window.ENGINE.handle(path, body === undefined ? null : body);
+  const opt = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  };
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({ ok: false, error: "返回不是 JSON" }));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+let timer;
+function toast(msg, bad) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.className = "show" + (bad ? " bad" : "");
+  clearTimeout(timer);
+  timer = setTimeout(() => (t.className = ""), 2600);
+}
+
+async function load() {
+  const r = await api("/api/items");
+  $("#count").textContent = `（共 ${r.items.length} 条，在库 ${r.items.filter(i => i.status === "in_store").length} 条）`;
+  $("#rows").innerHTML = r.items.map(i => `
+    <tr>
+      <td class="mono">#${i.id}</td>
+      <td class="ink">${esc(i.subject)}${i.brand && i.brand !== "unknown" ? " · " + esc(i.brand) : ""}
+        <div style="font-weight:400;color:#8B949D;font-size:11px;margin-top:3px">
+          ${esc(i.color)}　${esc((i.features || []).join(" / "))}</div></td>
+      <td>${esc(i.place)}</td>
+      <td>${esc(i.found_at)}</td>
+      <td><span class="pill ${i.status === "in_store" ? "" : "ok"}">
+        ${i.status === "in_store" ? "在库" : "已认领"}</span></td>
+    </tr>`).join("");
+
+  const lg = await api("/api/logs");
+  $("#logs").innerHTML = lg.logs.slice(0, 12).map(l => `
+    <div class="log"><time>${esc((l.created_at || "").slice(5, 16))}</time>
+      <b style="color:#17324D;font-weight:700">${esc(l.actor)}</b> · ${esc(l.action)}
+      · ${esc(l.target)}</div>`).join("");
+}
+
+$("#redeem").onclick = async () => {
+  const code = $("#code").value.trim().toUpperCase();
+  if (!code) return toast("请输入认领码", true);
+  try {
+    const r = await api("/api/redeem", { code });
+    $("#rmsg").innerHTML = `<span style="color:#2E7A72;font-weight:700">✓ ${esc(r.message)}</span>
+      <span style="color:#4E5A66"> — #${r.item.id} ${esc(r.item.subject)}（${esc(r.item.place)}）</span>`;
+    $("#code").value = "";
+    toast("核销成功");
+    load();
+  } catch (e) {
+    $("#rmsg").innerHTML = `<span style="color:#B4402F">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+};
+
+$("#code").addEventListener("keydown", e => { if (e.key === "Enter") $("#redeem").click(); });
+
+$("#reset").onclick = async () => {
+  if (!confirm("重置会清空当前所有物品与核验记录，恢复为 8 条演示数据。继续？")) return;
+  await api("/api/reset", {});
+  toast("已重置");
+  load();
+};
+
+load();
+setInterval(load, 8000);
+</script>
+
+<script src="engine.js"></script>
+</body>
+</html>
